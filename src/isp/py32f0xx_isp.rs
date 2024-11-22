@@ -1,4 +1,5 @@
 use super::Error;
+use std::io::{Read, Write};
 
 // Device and Memory constants
 const PY_CHIP_PID: u16 = 0x440;
@@ -37,9 +38,17 @@ const PY_OPTION_DEFAULT: [u8; 16] = [
     0xaa, 0xbe, 0x55, 0x41, 0xff, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00,
 ];
 
-struct Py32F0xxIsp<T>;
+struct Py32F0xxIsp<T: Read + Write> {
+    serial: T,
+}
 
-impl Py32F0xxIsp {
+impl<T: Read + Write> Py32F0xxIsp<T> {
+    pub fn new(serial: T) -> Self {
+        Self { serial }
+    }
+}
+
+impl<T: Read + Write> Py32F0xxIsp<T> {
     fn go(addr: u32) -> Result<(), Error> {
         todo!()
     }
