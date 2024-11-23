@@ -1,5 +1,4 @@
 pub mod py32f0xx_isp;
-// use heapless::Vec;
 
 const COMMAND_CNT: usize = 16;
 
@@ -26,6 +25,7 @@ pub enum IspCommand {
     Other,
 }
 
+#[derive(PartialEq, Debug)]
 pub enum Error {
     Unsupport,
     Address,

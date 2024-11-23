@@ -1,9 +1,6 @@
-use super::{Error, IspCommand};
-use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt};
-use std::{
-    borrow::BorrowMut,
-    io::{Read, Write},
-};
+use super::Error;
+use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
+use std::io::{Read, Write};
 
 // Device and Memory constants
 const PY_CHIP_PID: u16 = 0x440;
@@ -47,6 +44,7 @@ const PY_FRAME_MAX_LEN: usize = 256;
 #[derive(PartialEq)]
 enum Command {
     Get,
+    GetVersion,
     GetId,
     ReadMemory,
     Go,
@@ -65,6 +63,7 @@ impl From<Command> for u8 {
             Command::Go => PY_CMD_GO,
             Command::ReadMemory => PY_CMD_READ,
             Command::WriteMemory => PY_CMD_WRITE,
+            Command::GetVersion => PY_CMD_VER,
             Command::Other(c) => c,
         }
     }
@@ -79,6 +78,7 @@ impl From<u8> for Command {
             PY_CMD_GO => Self::Go,
             PY_CMD_WRITE => Self::WriteMemory,
             PY_CMD_ERASE => Self::EraseMemory,
+            PY_CMD_VER => Self::GetVersion,
             c => Self::Other(c),
         }
     }
@@ -88,13 +88,20 @@ pub struct Py32F0xxIsp<T: Read + Write> {
     serial: T,
 }
 
-pub struct ChipInfo {
-    ver: u8,
-}
-
 impl<T: Read + Write> Py32F0xxIsp<T> {
     pub fn new(serial: T) -> Self {
         Self { serial }
+    }
+
+    pub fn hand_shake(&mut self) -> Result<(), Error> {
+        self.clear_serial();
+        self.write_to_serial(&[PY_SYNCH])
+    }
+
+    pub fn clear_serial(&mut self) {
+        let mut v: [u8; 256] = [0; 256];
+        // 消耗掉 buf
+        let _ = self.serial.read(&mut v);
     }
 
     fn write_to_serial(&mut self, buf: &[u8]) -> Result<(), Error> {
@@ -108,7 +115,8 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
             .read_exact(&mut ack)
             .map_err(|_| Error::NoReply)?;
 
-        if ack[0] != PY_REPLY_ACK {
+        if ack[0] != PY_REPLY_ACK && ack[0] != PY_REPLY_NACK {
+            println!("repy: {:02x}", ack[0]);
             return Err(Error::NoAck);
         }
 
@@ -116,7 +124,10 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
     }
 
     fn read_from_serial(&mut self, buf: &mut [u8]) -> Result<(), Error> {
-        self.serial.read_exact(buf).map_err(|_| Error::Serial)
+        self.serial.read_exact(buf).map_err(|e| {
+            println!("{}", e);
+            Error::Serial
+        })
     }
 
     fn send_command(&mut self, cmd: Command) -> Result<(), Error> {
@@ -140,6 +151,8 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
     }
 
     pub fn get(&mut self) -> Result<(u8, Vec<u8>), Error> {
+        self.clear_serial();
+
         self.send_command(Command::Get)?;
         let mut len: [u8; 1] = [0; 1];
         self.read_from_serial(&mut len)?;
@@ -155,13 +168,15 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
             v.push(tmp[0]);
         }
 
-        Ok(v)
+        Ok((ver[0], v))
     }
 
     pub fn write_flash(&mut self, addr: u32, data: &[u8]) -> Result<(), Error> {
-        let mut item = data.chunks(PY_BLOCKSIZE);
+        self.clear_serial();
+
+        let item = data.chunks(PY_BLOCKSIZE);
         let mut cnt = 0;
-        while let Some(data) = item.next() {
+        for data in item {
             let len = data.len() as u8 - 1;
             let parity = data.iter().fold(len, |parity, x| parity ^ *x);
 
@@ -176,9 +191,11 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
     }
 
     pub fn read_flash(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Error> {
-        let mut item = buf.chunks_mut(PY_BLOCKSIZE);
+        self.clear_serial();
+
+        let item = buf.chunks_mut(PY_BLOCKSIZE);
         let mut cnt = 0;
-        while let Some(data) = item.next() {
+        for data in item {
             let len = data.len() as u8 - 1;
 
             self.send_command(Command::ReadMemory)?;
@@ -190,7 +207,9 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
         Ok(())
     }
 
-    pub fn read_id(&mut self) -> Result<u16, Error> {
+    pub fn get_id(&mut self) -> Result<u16, Error> {
+        self.clear_serial();
+
         self.send_command(Command::GetId)?;
         let mut len: [u8; 1] = [0; 1];
         self.read_from_serial(&mut len[..])?;
@@ -199,5 +218,17 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
         self.check_ack()?;
 
         Ok(BigEndian::read_u16(&pid))
+    }
+
+    pub fn get_version(&mut self) -> Result<u8, Error> {
+        self.clear_serial();
+
+        self.send_command(Command::GetVersion)?;
+
+        let mut ver: [u8; 3] = [0; 3];
+        self.read_from_serial(&mut ver[..])?;
+        self.check_ack()?;
+
+        Ok(ver[0])
     }
 }

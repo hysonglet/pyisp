@@ -7,3 +7,5 @@ edition = "2021"
 clap = { version = "4.5.21", features = ["derive"] }
 byteorder = "1"
 serial = "0.4.0"
+serialport = "3.3.0"
+mio-serial = "3.3.1"
