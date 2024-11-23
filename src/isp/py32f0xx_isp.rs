@@ -63,13 +63,18 @@ impl From<u8> for Command {
     fn from(value: u8) -> Self {
         let cmd = match value {
             PY_CMD_GET => IspCommand::Get,
+            PY_CMD_PID => IspCommand::Pid,
+            PY_CMD_READ => IspCommand::Read,
+            PY_CMD_GO => IspCommand::Go,
+            PY_CMD_WRITE => IspCommand::Write,
+            PY_CMD_ERASE => IspCommand::Erase,
             _ => unreachable!(),
         };
         Self { cmd }
     }
 }
 
-struct Py32F0xxIsp<T: Read + Write> {
+pub struct Py32F0xxIsp<T: Read + Write> {
     serial: T,
 }
 
@@ -80,16 +85,21 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
 }
 
 impl<T: Read + Write> Py32F0xxIsp<T> {
-    fn go(addr: u32) -> Result<(), Error> {
+    pub fn go(addr: u32) -> Result<(), Error> {
         todo!()
     }
 
-    fn get(&mut self) -> Result<Vec<Command>, Error> {
+    pub fn get(&mut self) -> Result<(u8, Vec<Command>), Error> {
         let _ = self.serial.write(&Get::cmd()).map_err(|_| Error::Serial)?;
         let mut buf: [u8; PY_FRAME_MAX_LEN] = [0; PY_FRAME_MAX_LEN];
         let len = self.serial.read(&mut buf).map_err(|_| Error::Serial)?;
         let mut get = Get::new();
-        get.parse(&buf[0..len], 0)?;
+        let _ = get.parse(&buf[0..len], 0)?;
+
+        Ok((
+            get.ver,
+            get.cmd.iter().map(|cmd| Command::from(*cmd)).collect(),
+        ))
     }
 }
 
@@ -107,8 +117,8 @@ trait command {
 }
 
 struct Get {
-    ver: u8,
-    cmd: Vec<u8>,
+    pub ver: u8,
+    pub cmd: Vec<u8>,
 }
 
 impl Get {
@@ -156,5 +166,145 @@ impl command for Get {
         }
 
         Ok(None)
+    }
+}
+
+struct GetId {
+    id: u16,
+}
+
+impl GetId {
+    pub fn new() -> Self {
+        Self { id: 0xff }
+    }
+}
+
+impl command for GetId {
+    const CMD: u8 = PY_CMD_PID;
+
+    fn parse(&mut self, reply: &[u8], _round: usize) -> Result<Option<Vec<u8>>, Error> {
+        if reply.is_empty() {
+            return Err(Error::NoReply);
+        }
+
+        if reply.len() != 5 {
+            return Err(Error::NoComplet);
+        }
+
+        if !reply.ends_with(&[Self::ack()]) || reply.starts_with(&[Self::ack()]) {
+            return Err(Error::NoAck);
+        }
+
+        let msb = reply[2] as u16;
+        let lsb = reply[3] as u16;
+
+        self.id = (msb << 8) | lsb;
+
+        Ok(None)
+    }
+}
+
+struct ReadMemory {
+    pub memory: Vec<u8>,
+    pub address: u32,
+    pub count: u8,
+}
+
+impl ReadMemory {
+    pub fn new(addr: u32, cnt: u8) -> Self {
+        Self {
+            address: addr,
+            memory: Vec::new(),
+            count: cnt,
+        }
+    }
+
+    pub fn cmd_address(&self) -> [u8; 5] {
+        let mut cmd: [u8; 5];
+        todo!()
+    }
+
+    pub fn cmd_count(&self) -> [u8; 2] {
+        todo!()
+    }
+}
+
+impl command for ReadMemory {
+    const CMD: u8 = PY_CMD_READ;
+
+    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
+        todo!()
+    }
+}
+
+struct Go {
+    address: u32,
+}
+
+impl Go {
+    pub fn new(addr: u32) -> Self {
+        Self { address: addr }
+    }
+
+    pub fn cmd_address(&self) -> [u8; 5] {
+        todo!()
+    }
+}
+
+impl command for Go {
+    const CMD: u8 = PY_CMD_GO;
+    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
+        todo!()
+    }
+}
+
+struct WriteMemory {
+    address: u32,
+    memory: Vec<u8>,
+
+    round: usize,
+}
+
+impl WriteMemory {
+    pub fn new(addr: u32, data: Vec<u8>) -> Self {
+        Self {
+            address: addr,
+            memory: data,
+            round: 0,
+        }
+    }
+
+    pub fn cmd_address(&self) -> [u8; 5] {
+        todo!()
+    }
+}
+
+impl command for WriteMemory {
+    const CMD: u8 = PY_CMD_WRITE;
+
+    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
+        todo!()
+    }
+}
+
+struct EraseMemory {
+    address: u32,
+    erase_type: u8,
+}
+
+impl EraseMemory {
+    fn new(address: u32, erase_type: u8) -> Self {
+        Self {
+            address,
+            erase_type,
+        }
+    }
+}
+
+impl command for EraseMemory {
+    const CMD: u8 = PY_CMD_ERASE;
+
+    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
+        todo!()
     }
 }
