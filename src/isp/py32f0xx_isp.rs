@@ -1,9 +1,13 @@
 use super::{Error, IspCommand};
-use std::io::{Read, Write};
+use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt};
+use std::{
+    borrow::BorrowMut,
+    io::{Read, Write},
+};
 
 // Device and Memory constants
 const PY_CHIP_PID: u16 = 0x440;
-const PY_BLOCKSIZE: u8 = 128;
+const PY_BLOCKSIZE: usize = 128;
 const PY_FLASH_ADDR: u32 = 0x08000000;
 const PY_CODE_ADDR: u32 = 0x08000000;
 const PY_SRAM_ADDR: u32 = 0x20000000;
@@ -40,37 +44,43 @@ const PY_OPTION_DEFAULT: [u8; 16] = [
 
 const PY_FRAME_MAX_LEN: usize = 256;
 
-struct Command {
-    cmd: IspCommand,
+#[derive(PartialEq)]
+enum Command {
+    Get,
+    GetId,
+    ReadMemory,
+    Go,
+    WriteMemory,
+    EraseMemory,
+
+    Other(u8),
 }
 
-impl Command {
-    pub fn new(cmd: IspCommand) -> Result<Self, Error> {
-        Ok(Self { cmd })
-    }
-    fn host_command_make(&self) -> [u8; 2] {
-        let cmd = match self.cmd {
-            IspCommand::Get => PY_CMD_GET,
-            IspCommand::Pid => PY_CMD_PID,
-            _ => unreachable!(),
-        };
-
-        [cmd, cmd ^ 0xff]
+impl From<Command> for u8 {
+    fn from(value: Command) -> Self {
+        match value {
+            Command::EraseMemory => PY_CMD_ERASE,
+            Command::Get => PY_CMD_GET,
+            Command::GetId => PY_CMD_PID,
+            Command::Go => PY_CMD_GO,
+            Command::ReadMemory => PY_CMD_READ,
+            Command::WriteMemory => PY_CMD_WRITE,
+            Command::Other(c) => c,
+        }
     }
 }
 
 impl From<u8> for Command {
     fn from(value: u8) -> Self {
-        let cmd = match value {
-            PY_CMD_GET => IspCommand::Get,
-            PY_CMD_PID => IspCommand::Pid,
-            PY_CMD_READ => IspCommand::Read,
-            PY_CMD_GO => IspCommand::Go,
-            PY_CMD_WRITE => IspCommand::Write,
-            PY_CMD_ERASE => IspCommand::Erase,
-            _ => unreachable!(),
-        };
-        Self { cmd }
+        match value {
+            PY_CMD_GET => Self::Get,
+            PY_CMD_PID => Self::GetId,
+            PY_CMD_READ => Self::ReadMemory,
+            PY_CMD_GO => Self::Go,
+            PY_CMD_WRITE => Self::WriteMemory,
+            PY_CMD_ERASE => Self::EraseMemory,
+            c => Self::Other(c),
+        }
     }
 }
 
@@ -78,233 +88,116 @@ pub struct Py32F0xxIsp<T: Read + Write> {
     serial: T,
 }
 
+pub struct ChipInfo {
+    ver: u8,
+}
+
 impl<T: Read + Write> Py32F0xxIsp<T> {
     pub fn new(serial: T) -> Self {
         Self { serial }
     }
+
+    fn write_to_serial(&mut self, buf: &[u8]) -> Result<(), Error> {
+        self.serial.write_all(buf).map_err(|_| Error::Serial)?;
+        self.check_ack()
+    }
+
+    fn check_ack(&mut self) -> Result<(), Error> {
+        let mut ack: [u8; 1] = [0; 1];
+        self.serial
+            .read_exact(&mut ack)
+            .map_err(|_| Error::NoReply)?;
+
+        if ack[0] != PY_REPLY_ACK {
+            return Err(Error::NoAck);
+        }
+
+        Ok(())
+    }
+
+    fn read_from_serial(&mut self, buf: &mut [u8]) -> Result<(), Error> {
+        self.serial.read_exact(buf).map_err(|_| Error::Serial)
+    }
+
+    fn send_command(&mut self, cmd: Command) -> Result<(), Error> {
+        let cmd: u8 = cmd.into();
+        self.write_to_serial(&[cmd, cmd ^ 0xff])
+    }
+
+    pub fn send_address(&mut self, addr: u32) -> Result<(), Error> {
+        let mut cmd: [u8; 5] = [0; 5];
+
+        BigEndian::write_u32(&mut cmd, addr);
+        cmd[4] = cmd[0..4].iter().fold(0, |xor, x| xor ^ x);
+        self.write_to_serial(&cmd)
+    }
 }
 
 impl<T: Read + Write> Py32F0xxIsp<T> {
-    pub fn go(addr: u32) -> Result<(), Error> {
-        todo!()
+    pub fn go(&mut self, addr: u32) -> Result<(), Error> {
+        self.send_command(Command::Go)?;
+        self.send_address(addr)
     }
 
-    pub fn get(&mut self) -> Result<(u8, Vec<Command>), Error> {
-        let _ = self.serial.write(&Get::cmd()).map_err(|_| Error::Serial)?;
-        let mut buf: [u8; PY_FRAME_MAX_LEN] = [0; PY_FRAME_MAX_LEN];
-        let len = self.serial.read(&mut buf).map_err(|_| Error::Serial)?;
-        let mut get = Get::new();
-        let _ = get.parse(&buf[0..len], 0)?;
+    pub fn get(&mut self) -> Result<(u8, Vec<u8>), Error> {
+        self.send_command(Command::Get)?;
+        let mut len: [u8; 1] = [0; 1];
+        self.read_from_serial(&mut len)?;
 
-        Ok((
-            get.ver,
-            get.cmd.iter().map(|cmd| Command::from(*cmd)).collect(),
-        ))
-    }
-}
+        let mut ver: [u8; 1] = [0; 1];
+        self.read_from_serial(&mut ver)?;
 
-trait command {
-    const CMD: u8;
-    fn cmd() -> [u8; 2] {
-        [Self::CMD, Self::CMD ^ 0xff]
-    }
-
-    fn ack() -> u8 {
-        PY_REPLY_ACK
-    }
-
-    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error>;
-}
-
-struct Get {
-    pub ver: u8,
-    pub cmd: Vec<u8>,
-}
-
-impl Get {
-    pub fn new() -> Self {
-        Self {
-            ver: 0,
-            cmd: Vec::new(),
-        }
-    }
-}
-
-impl command for Get {
-    const CMD: u8 = 0x00;
-
-    fn parse(&mut self, reply: &[u8], _round: usize) -> Result<Option<Vec<u8>>, Error> {
-        if reply.is_empty() {
-            return Err(Error::NoReply);
+        let len = len[0] + 1;
+        let mut v = Vec::new();
+        let mut tmp: [u8; 1] = [0; 1];
+        for _ in 0..len {
+            self.read_from_serial(&mut tmp)?;
+            v.push(tmp[0]);
         }
 
-        // 检查 ack
-        if reply[0] != Self::ack() {
-            return Err(Error::NoAck);
+        Ok(v)
+    }
+
+    pub fn write_flash(&mut self, addr: u32, data: &[u8]) -> Result<(), Error> {
+        let mut item = data.chunks(PY_BLOCKSIZE);
+        let mut cnt = 0;
+        while let Some(data) = item.next() {
+            let len = data.len() as u8 - 1;
+            let parity = data.iter().fold(len, |parity, x| parity ^ *x);
+
+            self.send_command(Command::WriteMemory)?;
+            self.send_address(addr + cnt)?;
+            self.write_to_serial(&[len])?;
+            self.write_to_serial(data)?;
+            self.write_to_serial(&[parity])?;
+            cnt += data.len() as u32;
         }
+        Ok(())
+    }
 
-        if reply.len() < 2 {
-            return Err(Error::NoComplet);
+    pub fn read_flash(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Error> {
+        let mut item = buf.chunks_mut(PY_BLOCKSIZE);
+        let mut cnt = 0;
+        while let Some(data) = item.next() {
+            let len = data.len() as u8 - 1;
+
+            self.send_command(Command::ReadMemory)?;
+            self.send_address(addr + cnt)?;
+            self.send_command(Command::Other(len))?;
+            self.read_from_serial(data)?;
+            cnt += data.len() as u32;
         }
-
-        let len = reply[1] as usize + 4;
-
-        if len != reply.len() {
-            return Err(Error::NoComplet);
-        }
-
-        // 获取版本
-        self.ver = reply[2];
-
-        // 获取支持的命令
-        for i in 3..=len - 2 {
-            self.cmd.push(reply[i]);
-        }
-
-        if reply[len - 1] != Self::ack() {
-            return Err(Error::Parse);
-        }
-
-        Ok(None)
-    }
-}
-
-struct GetId {
-    id: u16,
-}
-
-impl GetId {
-    pub fn new() -> Self {
-        Self { id: 0xff }
-    }
-}
-
-impl command for GetId {
-    const CMD: u8 = PY_CMD_PID;
-
-    fn parse(&mut self, reply: &[u8], _round: usize) -> Result<Option<Vec<u8>>, Error> {
-        if reply.is_empty() {
-            return Err(Error::NoReply);
-        }
-
-        if reply.len() != 5 {
-            return Err(Error::NoComplet);
-        }
-
-        if !reply.ends_with(&[Self::ack()]) || reply.starts_with(&[Self::ack()]) {
-            return Err(Error::NoAck);
-        }
-
-        let msb = reply[2] as u16;
-        let lsb = reply[3] as u16;
-
-        self.id = (msb << 8) | lsb;
-
-        Ok(None)
-    }
-}
-
-struct ReadMemory {
-    pub memory: Vec<u8>,
-    pub address: u32,
-    pub count: u8,
-}
-
-impl ReadMemory {
-    pub fn new(addr: u32, cnt: u8) -> Self {
-        Self {
-            address: addr,
-            memory: Vec::new(),
-            count: cnt,
-        }
+        Ok(())
     }
 
-    pub fn cmd_address(&self) -> [u8; 5] {
-        let mut cmd: [u8; 5];
-        todo!()
-    }
+    pub fn read_id(&mut self) -> Result<u16, Error> {
+        self.send_command(Command::GetId)?;
+        let mut len: [u8; 1] = [0; 1];
+        self.read_from_serial(&mut len[..])?;
+        let mut pid: [u8; 2] = [0; 2];
+        self.read_from_serial(&mut pid)?;
+        self.check_ack()?;
 
-    pub fn cmd_count(&self) -> [u8; 2] {
-        todo!()
-    }
-}
-
-impl command for ReadMemory {
-    const CMD: u8 = PY_CMD_READ;
-
-    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
-        todo!()
-    }
-}
-
-struct Go {
-    address: u32,
-}
-
-impl Go {
-    pub fn new(addr: u32) -> Self {
-        Self { address: addr }
-    }
-
-    pub fn cmd_address(&self) -> [u8; 5] {
-        todo!()
-    }
-}
-
-impl command for Go {
-    const CMD: u8 = PY_CMD_GO;
-    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
-        todo!()
-    }
-}
-
-struct WriteMemory {
-    address: u32,
-    memory: Vec<u8>,
-
-    round: usize,
-}
-
-impl WriteMemory {
-    pub fn new(addr: u32, data: Vec<u8>) -> Self {
-        Self {
-            address: addr,
-            memory: data,
-            round: 0,
-        }
-    }
-
-    pub fn cmd_address(&self) -> [u8; 5] {
-        todo!()
-    }
-}
-
-impl command for WriteMemory {
-    const CMD: u8 = PY_CMD_WRITE;
-
-    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
-        todo!()
-    }
-}
-
-struct EraseMemory {
-    address: u32,
-    erase_type: u8,
-}
-
-impl EraseMemory {
-    fn new(address: u32, erase_type: u8) -> Self {
-        Self {
-            address,
-            erase_type,
-        }
-    }
-}
-
-impl command for EraseMemory {
-    const CMD: u8 = PY_CMD_ERASE;
-
-    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error> {
-        todo!()
+        Ok(BigEndian::read_u16(&pid))
     }
 }
