@@ -1,4 +1,4 @@
-use super::Error;
+use super::{Error, IspCommand};
 use std::io::{Read, Write};
 
 // Device and Memory constants
@@ -38,6 +38,37 @@ const PY_OPTION_DEFAULT: [u8; 16] = [
     0xaa, 0xbe, 0x55, 0x41, 0xff, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00,
 ];
 
+const PY_FRAME_MAX_LEN: usize = 256;
+
+struct Command {
+    cmd: IspCommand,
+}
+
+impl Command {
+    pub fn new(cmd: IspCommand) -> Result<Self, Error> {
+        Ok(Self { cmd })
+    }
+    fn host_command_make(&self) -> [u8; 2] {
+        let cmd = match self.cmd {
+            IspCommand::Get => PY_CMD_GET,
+            IspCommand::Pid => PY_CMD_PID,
+            _ => unreachable!(),
+        };
+
+        [cmd, cmd ^ 0xff]
+    }
+}
+
+impl From<u8> for Command {
+    fn from(value: u8) -> Self {
+        let cmd = match value {
+            PY_CMD_GET => IspCommand::Get,
+            _ => unreachable!(),
+        };
+        Self { cmd }
+    }
+}
+
 struct Py32F0xxIsp<T: Read + Write> {
     serial: T,
 }
@@ -51,5 +82,79 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
 impl<T: Read + Write> Py32F0xxIsp<T> {
     fn go(addr: u32) -> Result<(), Error> {
         todo!()
+    }
+
+    fn get(&mut self) -> Result<Vec<Command>, Error> {
+        let _ = self.serial.write(&Get::cmd()).map_err(|_| Error::Serial)?;
+        let mut buf: [u8; PY_FRAME_MAX_LEN] = [0; PY_FRAME_MAX_LEN];
+        let len = self.serial.read(&mut buf).map_err(|_| Error::Serial)?;
+        let mut get = Get::new();
+        get.parse(&buf[0..len], 0)?;
+    }
+}
+
+trait command {
+    const CMD: u8;
+    fn cmd() -> [u8; 2] {
+        [Self::CMD, Self::CMD ^ 0xff]
+    }
+
+    fn ack() -> u8 {
+        PY_REPLY_ACK
+    }
+
+    fn parse(&mut self, reply: &[u8], round: usize) -> Result<Option<Vec<u8>>, Error>;
+}
+
+struct Get {
+    ver: u8,
+    cmd: Vec<u8>,
+}
+
+impl Get {
+    pub fn new() -> Self {
+        Self {
+            ver: 0,
+            cmd: Vec::new(),
+        }
+    }
+}
+
+impl command for Get {
+    const CMD: u8 = 0x00;
+
+    fn parse(&mut self, reply: &[u8], _round: usize) -> Result<Option<Vec<u8>>, Error> {
+        if reply.is_empty() {
+            return Err(Error::NoReply);
+        }
+
+        // 检查 ack
+        if reply[0] != Self::ack() {
+            return Err(Error::NoAck);
+        }
+
+        if reply.len() < 2 {
+            return Err(Error::NoComplet);
+        }
+
+        let len = reply[1] as usize + 4;
+
+        if len != reply.len() {
+            return Err(Error::NoComplet);
+        }
+
+        // 获取版本
+        self.ver = reply[2];
+
+        // 获取支持的命令
+        for i in 3..=len - 2 {
+            self.cmd.push(reply[i]);
+        }
+
+        if reply[len - 1] != Self::ack() {
+            return Err(Error::Parse);
+        }
+
+        Ok(None)
     }
 }
