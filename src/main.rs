@@ -1,5 +1,8 @@
 use clap::Parser;
+use isp::py32f0xx_isp::PY_CODE_ADDR;
 use serialport::{available_ports, DataBits, FlowControl, Parity, SerialPortSettings, StopBits};
+use std::fs;
+use std::io::Read;
 use std::{thread::sleep, time::Duration};
 
 mod isp;
@@ -20,20 +23,18 @@ struct Args {
     lock: Option<bool>,
 
     /// perform chip erase (implied with -f)
-    #[arg(short, long)]
-    erase: Option<bool>,
+    #[arg(short, long, default_value_t = false)]
+    erase: bool,
 
-    /// reset option bytes
-    #[arg(short, long)]
-    rstoption: Option<bool>,
-
-    /// make nRST pin a RESET pin(false: nRST pin as GPIO pin)
-    #[arg(short, long)]
-    nrst_as_reset: Option<bool>,
-
+    // /// reset option bytes
+    // #[arg(short, long)]
+    // rstoption: Option<bool>,
+    // /// make nRST pin a RESET pin(false: nRST pin as GPIO pin)
+    // #[arg(short, long)]
+    // nrst_as_reset: Option<bool>,
     /// write BIN file to flash and verify
-    #[arg(short, long)]
-    addr: Option<u32>,
+    // #[arg(short, long)]
+    // addr: Option<u32>,
 
     /// flash BIN file name
     #[arg(short, long)]
@@ -42,10 +43,35 @@ struct Args {
     /// print serial
     #[arg(short, long, default_value_t = false)]
     probe: bool,
+
+    /// Run to...
+    #[arg(short, long, default_value_t = true)]
+    go: bool,
+
+    #[arg(short, long, default_value_t = true)]
+    console: bool,
 }
 
 fn main() {
     let args = Args::parse();
+
+    let mut binary = Vec::<u8>::new();
+    if let Some(file) = args.file {
+        if fs::metadata(&file).is_err() {
+            println!("Not such file: {}", file);
+            return;
+        }
+        if !file.ends_with(".bin") {
+            println!("Only support flash binary file");
+            return;
+        }
+        let mut file = fs::File::open(file).expect("Can't Open the file");
+        let size = file.read_to_end(&mut binary).expect("Cant't read the file");
+        if size == 0 {
+            println!("Empty file");
+            return;
+        }
+    }
 
     let serial_list = available_ports().unwrap();
 
@@ -84,10 +110,10 @@ fn main() {
             &SerialPortSettings {
                 baud_rate: 115200,
                 data_bits: DataBits::Eight,
-                parity: Parity::None,
+                parity: Parity::Even,
                 flow_control: FlowControl::None,
                 stop_bits: StopBits::One,
-                timeout: Duration::from_secs(1),
+                timeout: Duration::from_millis(500),
             },
         );
 
@@ -112,14 +138,38 @@ fn main() {
                 }
             }
             sleep(Duration::from_millis(1000));
+
+            if i == 10 {
+                println!("Faild to handshake...");
+                return;
+            }
             println!("try to connect: {i}");
         }
-
-        sleep(Duration::from_secs(1));
         println!("get: {:02x?}", isp.get());
         println!("id:  {:04x?}", isp.get_id());
         println!("ver: {:04x?}", isp.get_version());
-        println!("go:  {:?}", isp.go(0x8000000));
+        // println!("unlock: {:?}", isp.read_unlock());
+        println!("read option: {:x?}", isp.read_option());
+
+        // 当存在文件才烧录
+        if !binary.is_empty() {
+            println!("erase: {:?}", isp.erase_chip());
+            println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
+
+            if args.go {
+                println!("go:  {:?}", isp.go(PY_CODE_ADDR));
+            }
+
+            return;
+        }
+
+        if args.erase {
+            println!("erase: {:?}", isp.erase_chip());
+        }
+
+        if args.go {
+            println!("go:  {:?}", isp.go(PY_CODE_ADDR));
+        }
     } else {
         //自由扫描
     }
