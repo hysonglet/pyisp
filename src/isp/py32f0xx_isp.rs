@@ -19,6 +19,7 @@ const PY_OPTION_ADDR: u32 = 0x1fff0e80;
 #[allow(unused)]
 const PY_CONFIG_ADDR: u32 = 0x1fff0f00;
 
+#[allow(unused)]
 const PY_FLASH_SIZE: u32 = 64 * 1024;
 
 // Command codes

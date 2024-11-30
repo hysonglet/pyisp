@@ -3,7 +3,7 @@ pub mod py32f0xx_isp;
 #[derive(PartialEq, Debug)]
 pub enum Error {
     // Unsupport,
-    Address,
+    // Address,
     NoReply,
     // Len(usize),
 

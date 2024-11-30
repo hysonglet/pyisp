@@ -16,15 +16,14 @@ mod isp;
 struct Args {
     /// Name of the person to greet
     #[arg(short, long)]
-    com: Option<String>,
+    serial: Option<String>,
 
-    /// lock chip (set read protection)
-    #[arg(short, long)]
-    lock: Option<bool>,
-
+    // /// lock chip (set read protection)
+    // #[arg(short, long)]
+    // lock: Option<bool>,
     /// perform chip erase (implied with -f)
-    #[arg(short, long, default_value_t = false)]
-    erase: bool,
+    // #[arg(short, long, default_value_t = false)]
+    // erase: bool,
 
     // /// reset option bytes
     // #[arg(short, long)]
@@ -47,9 +46,8 @@ struct Args {
     /// Run to...
     #[arg(short, long, default_value_t = true)]
     go: bool,
-
-    #[arg(short, long, default_value_t = true)]
-    console: bool,
+    // #[arg(short, long, default_value_t = false)]
+    // console: bool,
 }
 
 fn main() {
@@ -85,7 +83,7 @@ fn main() {
 
     let mut serial_name = String::new();
 
-    if let Some(com) = args.com {
+    if let Some(com) = args.serial {
         for s in &serial_list {
             if s.port_name.ends_with(com.as_str()) {
                 serial_name = s.port_name.clone();
@@ -103,74 +101,61 @@ fn main() {
         }
     }
 
-    //
-    if !serial_name.is_empty() {
-        let serial = serialport::open_with_settings(
-            serial_name.as_str(),
-            &SerialPortSettings {
-                baud_rate: 115200,
-                data_bits: DataBits::Eight,
-                parity: Parity::Even,
-                flow_control: FlowControl::None,
-                stop_bits: StopBits::One,
-                timeout: Duration::from_millis(500),
-            },
-        );
+    // 输入了串口
+    if !serial_name.is_empty() {}
+    let serial = serialport::open_with_settings(
+        serial_name.as_str(),
+        &SerialPortSettings {
+            baud_rate: 115200,
+            data_bits: DataBits::Eight,
+            parity: Parity::Even,
+            flow_control: FlowControl::None,
+            stop_bits: StopBits::One,
+            timeout: Duration::from_millis(500),
+        },
+    );
 
-        if let Err(e) = &serial {
-            println!("faild to open {}: {}", serial_name, e.description);
-            return;
-        };
+    if let Err(e) = &serial {
+        println!("Faild to open {}: {}", serial_name, e.description);
+        return;
+    };
 
-        let mut isp = isp::py32f0xx_isp::Py32F0xxIsp::new(serial.unwrap());
+    let mut isp = isp::py32f0xx_isp::Py32F0xxIsp::new(serial.unwrap());
 
-        for i in 1..=10 {
-            match isp.hand_shake() {
-                Ok(()) => {
-                    println!("ok");
-                    break;
-                }
-                Err(isp::Error::Serial) => {
-                    return;
-                }
-                Err(e) => {
-                    println!("{:?}", e);
-                }
+    for i in 1..=10 {
+        match isp.hand_shake() {
+            Ok(()) => {
+                println!("Connected");
+                break;
             }
-            sleep(Duration::from_millis(1000));
-
-            if i == 10 {
-                println!("Faild to handshake...");
+            Err(isp::Error::Serial) => {
                 return;
             }
-            println!("try to connect: {i}");
-        }
-        println!("get: {:02x?}", isp.get());
-        println!("id:  {:04x?}", isp.get_id());
-        println!("ver: {:04x?}", isp.get_version());
-        // println!("unlock: {:?}", isp.read_unlock());
-        println!("read option: {:x?}", isp.read_option());
-
-        // 当存在文件才烧录
-        if !binary.is_empty() {
-            println!("erase: {:?}", isp.erase_chip());
-            println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
-
-            if args.go {
-                println!("go:  {:?}", isp.go(PY_CODE_ADDR));
+            Err(e) => {
+                println!("{:?}", e);
             }
+        }
+        sleep(Duration::from_millis(1000));
 
+        if i == 10 {
+            println!("Faild to handshake...");
             return;
         }
+        println!("try to connect: {i}");
+    }
+    println!("get: {:02x?}", isp.get());
+    println!("id:  {:04x?}", isp.get_id());
+    println!("ver: {:04x?}", isp.get_version());
+    // println!("unlock: {:?}", isp.read_unlock());
+    println!("read option: {:x?}", isp.read_option());
 
-        if args.erase {
-            println!("erase: {:?}", isp.erase_chip());
-        }
+    // 当存在文件才烧录
+    if !binary.is_empty() {
+        println!("erase: {:?}", isp.erase_chip());
+        println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
 
         if args.go {
             println!("go:  {:?}", isp.go(PY_CODE_ADDR));
         }
-    } else {
-        //自由扫描
     }
 }
