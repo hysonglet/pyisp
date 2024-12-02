@@ -1,6 +1,10 @@
 use clap::Parser;
 use isp::py32f0xx_isp::PY_CODE_ADDR;
-use serialport::{available_ports, DataBits, FlowControl, Parity, SerialPortSettings, StopBits};
+// use serialport::{available_ports, DataBits, FlowControl, Parity, SerialPortSettings, StopBits};
+
+// extern crate serial;
+use serial::prelude::{SerialPort, SerialPortSettings};
+
 use std::fs;
 use std::io::Read;
 use std::{thread::sleep, time::Duration};
