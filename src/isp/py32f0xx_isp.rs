@@ -1,6 +1,8 @@
 use super::Error;
 use byteorder::{BigEndian, ByteOrder};
-use std::io::{Read, Write};
+use std::{thread::sleep, time::Duration};
+
+use serial::SerialPort;
 
 // Device and Memory constants
 #[allow(unused)]
@@ -102,16 +104,34 @@ impl From<u8> for Command {
     }
 }
 
-pub struct Py32F0xxIsp<T: Read + Write> {
+pub struct Py32F0xxIsp<T: SerialPort> {
     serial: T,
 }
 
-impl<T: Read + Write> Py32F0xxIsp<T> {
+impl<T: SerialPort> Py32F0xxIsp<T> {
+    fn boot_into(&mut self) {
+        // dtr -> boot0
+        // rts -> nrst
+        let _ = self.serial.set_dtr(true);
+        sleep(Duration::from_millis(50));
+        let _ = self.serial.set_rts(false);
+        sleep(Duration::from_millis(50));
+        let _ = self.serial.set_rts(true);
+        sleep(Duration::from_millis(50));
+        // 进入了boot 模式
+        // 此时可以恢复 boot0 为 0了，0表示默认 引导 flash 程序
+        let _ = self.serial.set_dtr(false);
+    }
+}
+
+impl<T: SerialPort> Py32F0xxIsp<T> {
     pub fn new(serial: T) -> Self {
         Self { serial }
     }
 
     pub fn hand_shake(&mut self) -> Result<(), Error> {
+        self.boot_into();
+        sleep(Duration::from_millis(100));
         self.clear_serial();
         self.write_to_serial(&[PY_SYNCH])
     }
@@ -167,7 +187,7 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
     }
 }
 
-impl<T: Read + Write> Py32F0xxIsp<T> {
+impl<T: SerialPort> Py32F0xxIsp<T> {
     pub fn go(&mut self, addr: u32) -> Result<(), Error> {
         self.send_command(Command::Go)?;
         self.send_address(addr)
@@ -264,6 +284,7 @@ impl<T: Read + Write> Py32F0xxIsp<T> {
         Ok(ver[0])
     }
 
+    #[allow(unused)]
     pub fn read_unlock(&mut self) -> Result<(), Error> {
         self.clear_serial();
         self.send_command(Command::ReadUnlock)

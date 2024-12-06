@@ -1,9 +1,10 @@
 use clap::Parser;
 use isp::py32f0xx_isp::PY_CODE_ADDR;
-// use serialport::{available_ports, DataBits, FlowControl, Parity, SerialPortSettings, StopBits};
+use serial::SerialPort;
+use serialport::available_ports;
 
 // extern crate serial;
-use serial::prelude::{SerialPort, SerialPortSettings};
+// use serial::prelude::{SerialPort, SerialPortSettings};
 
 use std::fs;
 use std::io::Read;
@@ -77,9 +78,10 @@ fn main() {
 
     let serial_list = available_ports().unwrap();
 
+    // 打印当前电脑所有的串口
     if args.probe {
         for p in serial_list {
-            println!("\t info: {:?}", p);
+            println!("\t port: {}", p.port_name);
         }
 
         return;
@@ -106,60 +108,80 @@ fn main() {
     }
 
     // 输入了串口
-    if !serial_name.is_empty() {}
-    let serial = serialport::open_with_settings(
-        serial_name.as_str(),
-        &SerialPortSettings {
-            baud_rate: 115200,
-            data_bits: DataBits::Eight,
-            parity: Parity::Even,
-            flow_control: FlowControl::None,
-            stop_bits: StopBits::One,
-            timeout: Duration::from_millis(500),
-        },
-    );
-
-    if let Err(e) = &serial {
-        println!("Faild to open {}: {}", serial_name, e.description);
-        return;
-    };
-
-    let mut isp = isp::py32f0xx_isp::Py32F0xxIsp::new(serial.unwrap());
-
-    for i in 1..=10 {
-        match isp.hand_shake() {
-            Ok(()) => {
-                println!("Connected");
-                break;
-            }
-            Err(isp::Error::Serial) => {
+    if !serial_name.is_empty() {
+        let mut serial = match serial::open(&serial_name) {
+            Ok(serial) => serial,
+            Err(e) => {
+                println!("{}", e.to_string());
                 return;
             }
-            Err(e) => {
-                println!("{:?}", e);
+        };
+
+        let _ = serial.reconfigure(&|s| {
+            let _ = s.set_baud_rate(serial::BaudRate::Baud115200);
+            s.set_char_size(serial::CharSize::Bits8);
+            s.set_parity(serial::Parity::ParityEven);
+            s.set_stop_bits(serial::StopBits::Stop1);
+            s.set_flow_control(serial::FlowControl::FlowNone);
+            Ok(())
+        });
+
+        let _ = serial.set_timeout(Duration::from_millis(500));
+
+        // let serial = serialport::open_with_settings(
+        //     serial_name.as_str(),
+        //     &SerialPortSettings {
+        //         baud_rate: 115200,
+        //         data_bits: DataBits::Eight,
+        //         parity: Parity::Even,
+        //         flow_control: FlowControl::None,
+        //         stop_bits: StopBits::One,
+        //         timeout: Duration::from_millis(500),
+        //     },
+        // );
+
+        // if let Err(e) = &serial {
+        //     println!("Faild to open {}: {}", serial_name, e.description);
+        //     return;
+        // };
+
+        let mut isp = isp::py32f0xx_isp::Py32F0xxIsp::new(serial);
+
+        for i in 1..=10 {
+            match isp.hand_shake() {
+                Ok(()) => {
+                    println!("Connected");
+                    break;
+                }
+                Err(isp::Error::Serial) => {
+                    return;
+                }
+                Err(e) => {
+                    println!("{:?}", e);
+                }
             }
+            sleep(Duration::from_millis(1000));
+
+            if i == 10 {
+                println!("Faild to handshake...");
+                return;
+            }
+            println!("try to connect: {i}");
         }
-        sleep(Duration::from_millis(1000));
+        println!("get: {:02x?}", isp.get());
+        println!("id:  {:04x?}", isp.get_id());
+        println!("ver: {:04x?}", isp.get_version());
+        // println!("unlock: {:?}", isp.read_unlock());
+        println!("read option: {:x?}", isp.read_option());
 
-        if i == 10 {
-            println!("Faild to handshake...");
-            return;
-        }
-        println!("try to connect: {i}");
-    }
-    println!("get: {:02x?}", isp.get());
-    println!("id:  {:04x?}", isp.get_id());
-    println!("ver: {:04x?}", isp.get_version());
-    // println!("unlock: {:?}", isp.read_unlock());
-    println!("read option: {:x?}", isp.read_option());
+        // 当存在文件才烧录
+        if !binary.is_empty() {
+            println!("erase: {:?}", isp.erase_chip());
+            println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
 
-    // 当存在文件才烧录
-    if !binary.is_empty() {
-        println!("erase: {:?}", isp.erase_chip());
-        println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
-
-        if args.go {
-            println!("go:  {:?}", isp.go(PY_CODE_ADDR));
+            if args.go {
+                println!("go:  {:?}", isp.go(PY_CODE_ADDR));
+            }
         }
     }
 }
