@@ -109,18 +109,26 @@ pub struct Py32F0xxIsp<T: SerialPort> {
 }
 
 impl<T: SerialPort> Py32F0xxIsp<T> {
-    fn boot_into(&mut self) {
+    pub fn boot_into(&mut self) {
+        // return;
         // dtr -> boot0
         // rts -> nrst
-        let _ = self.serial.set_dtr(true);
-        sleep(Duration::from_millis(50));
-        let _ = self.serial.set_rts(false);
-        sleep(Duration::from_millis(50));
-        let _ = self.serial.set_rts(true);
-        sleep(Duration::from_millis(50));
+        // let _ = self.serial.set_dtr(true);
+        // sleep(Duration::from_millis(100));
+        // let _ = self.serial.set_rts(false);
+        // sleep(Duration::from_millis(100));
+        // let _ = self.serial.set_rts(true);
+        // sleep(Duration::from_millis(100));
         // 进入了boot 模式
         // 此时可以恢复 boot0 为 0了，0表示默认 引导 flash 程序
+        // let _ = self.serial.set_dtr(false);
+
+        let _ = self.serial.set_rts(false);
         let _ = self.serial.set_dtr(false);
+        let _ = self.serial.set_rts(true);
+        sleep(Duration::from_millis(100));
+        let _ = self.serial.set_rts(false);
+        sleep(Duration::from_millis(100));
     }
 }
 
@@ -130,8 +138,8 @@ impl<T: SerialPort> Py32F0xxIsp<T> {
     }
 
     pub fn hand_shake(&mut self) -> Result<(), Error> {
-        self.boot_into();
-        sleep(Duration::from_millis(100));
+        // self.boot_into();
+        // sleep(Duration::from_millis(500));
         self.clear_serial();
         self.write_to_serial(&[PY_SYNCH])
     }

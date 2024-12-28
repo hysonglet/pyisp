@@ -23,22 +23,9 @@ struct Args {
     #[arg(short, long)]
     serial: Option<String>,
 
-    // /// lock chip (set read protection)
-    // #[arg(short, long)]
-    // lock: Option<bool>,
-    /// perform chip erase (implied with -f)
-    // #[arg(short, long, default_value_t = false)]
-    // erase: bool,
-
-    // /// reset option bytes
-    // #[arg(short, long)]
-    // rstoption: Option<bool>,
-    // /// make nRST pin a RESET pin(false: nRST pin as GPIO pin)
-    // #[arg(short, long)]
-    // nrst_as_reset: Option<bool>,
-    /// write BIN file to flash and verify
-    // #[arg(short, long)]
-    // addr: Option<u32>,
+    /// Cycle mode for flash many times
+    #[arg(short, long, default_value_t = false)]
+    cycle: bool,
 
     /// flash BIN file name
     #[arg(short, long)]
@@ -107,80 +94,87 @@ fn main() {
         }
     }
 
-    // 输入了串口
-    if !serial_name.is_empty() {
-        let mut serial = match serial::open(&serial_name) {
-            Ok(serial) => serial,
-            Err(e) => {
-                println!("{}", e.to_string());
-                return;
-            }
-        };
-
-        let _ = serial.reconfigure(&|s| {
-            let _ = s.set_baud_rate(serial::BaudRate::Baud115200);
-            s.set_char_size(serial::CharSize::Bits8);
-            s.set_parity(serial::Parity::ParityEven);
-            s.set_stop_bits(serial::StopBits::Stop1);
-            s.set_flow_control(serial::FlowControl::FlowNone);
-            Ok(())
-        });
-
-        let _ = serial.set_timeout(Duration::from_millis(500));
-
-        // let serial = serialport::open_with_settings(
-        //     serial_name.as_str(),
-        //     &SerialPortSettings {
-        //         baud_rate: 115200,
-        //         data_bits: DataBits::Eight,
-        //         parity: Parity::Even,
-        //         flow_control: FlowControl::None,
-        //         stop_bits: StopBits::One,
-        //         timeout: Duration::from_millis(500),
-        //     },
-        // );
-
-        // if let Err(e) = &serial {
-        //     println!("Faild to open {}: {}", serial_name, e.description);
-        //     return;
-        // };
-
-        let mut isp = isp::py32f0xx_isp::Py32F0xxIsp::new(serial);
-
-        for i in 1..=10 {
-            match isp.hand_shake() {
-                Ok(()) => {
-                    println!("Connected");
-                    break;
-                }
-                Err(isp::Error::Serial) => {
-                    return;
-                }
+    loop {
+        // 输入了串口
+        if !serial_name.is_empty() {
+            let mut serial = match serial::open(&serial_name) {
+                Ok(serial) => serial,
                 Err(e) => {
-                    println!("{:?}", e);
+                    println!("{}", e.to_string());
+                    sleep(Duration::from_millis(1 * 1000));
+                    if !args.cycle {
+                        return;
+                    }
+                    continue;
+                }
+            };
+
+            let _ = serial.reconfigure(&|s| {
+                let _ = s.set_baud_rate(serial::BaudRate::Baud115200);
+                s.set_char_size(serial::CharSize::Bits8);
+                s.set_parity(serial::Parity::ParityEven);
+                s.set_stop_bits(serial::StopBits::Stop1);
+                s.set_flow_control(serial::FlowControl::FlowNone);
+                Ok(())
+            });
+
+            let _ = serial.set_timeout(Duration::from_millis(100));
+
+            let mut isp = isp::py32f0xx_isp::Py32F0xxIsp::new(serial);
+
+            let mut try_handshake = 0;
+            let hand_shake = loop {
+                try_handshake += 1;
+                isp.boot_into();
+                match isp.hand_shake() {
+                    Ok(()) => {
+                        println!("Connected");
+                        break true;
+                    }
+                    Err(isp::Error::Serial) => {
+                        break false;
+                    }
+                    Err(e) => {
+                        println!("{:?}", e);
+                    }
+                };
+                sleep(Duration::from_millis(1000));
+
+                if try_handshake == 10 {
+                    println!("Faild to handshake...");
+                    break false;
+                }
+                println!("try to connect: {try_handshake}");
+            };
+            if !hand_shake {
+                continue;
+            }
+
+            println!("get: {:02x?}", isp.get());
+            println!("id:  {:04x?}", isp.get_id());
+            println!("ver: {:04x?}", isp.get_version());
+            // println!("unlock: {:?}", isp.read_unlock());
+            println!("read option: {:x?}", isp.read_option());
+
+            // 当存在文件才烧录
+            if !binary.is_empty() {
+                println!("erase: {:?}", isp.erase_chip());
+                println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
+
+                if args.go {
+                    println!("go:  {:?}", isp.go(PY_CODE_ADDR));
                 }
             }
-            sleep(Duration::from_millis(1000));
-
-            if i == 10 {
-                println!("Faild to handshake...");
-                return;
-            }
-            println!("try to connect: {i}");
         }
-        println!("get: {:02x?}", isp.get());
-        println!("id:  {:04x?}", isp.get_id());
-        println!("ver: {:04x?}", isp.get_version());
-        // println!("unlock: {:?}", isp.read_unlock());
-        println!("read option: {:x?}", isp.read_option());
 
-        // 当存在文件才烧录
-        if !binary.is_empty() {
-            println!("erase: {:?}", isp.erase_chip());
-            println!("flash: {:?}", isp.write_flash(PY_CODE_ADDR, &binary));
+        // 循环模式
+        if !args.cycle {
+            break;
+        } else {
+            while serial::open(&serial_name).is_ok() {
+                println!("Wait for disconnect {}...", serial_name);
 
-            if args.go {
-                println!("go:  {:?}", isp.go(PY_CODE_ADDR));
+                sleep(Duration::from_millis(1 * 1000));
             }
         }
     }
