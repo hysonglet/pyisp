@@ -3,9 +3,6 @@ use isp::py32f0xx_isp::PY_CODE_ADDR;
 use serial::SerialPort;
 use serialport::available_ports;
 
-// extern crate serial;
-// use serial::prelude::{SerialPort, SerialPortSettings};
-
 use std::fs;
 use std::io::Read;
 use std::{thread::sleep, time::Duration};
@@ -19,13 +16,17 @@ mod isp;
     author = "Alingsos",
     version = "0.1.0")]
 struct Args {
-    /// Name of the person to greet
+    /// Name of seral port
     #[arg(short, long)]
     serial: Option<String>,
 
     /// Cycle mode for flash many times
     #[arg(short, long, default_value_t = false)]
     cycle: bool,
+
+    /// Product mode for flash many times
+    #[arg(long, default_value_t = false)]
+    product: bool,
 
     /// flash BIN file name
     #[arg(short, long)]
@@ -36,7 +37,7 @@ struct Args {
     probe: bool,
 
     /// Run to...
-    #[arg(short, long, default_value_t = true)]
+    #[arg(short, long, default_value_t = false)]
     go: bool,
     // #[arg(short, long, default_value_t = false)]
     // console: bool,
@@ -102,7 +103,7 @@ fn main() {
                 Err(e) => {
                     println!("{}", e.to_string());
                     sleep(Duration::from_millis(1 * 1000));
-                    if !args.cycle {
+                    if !args.product {
                         return;
                     }
                     continue;
@@ -167,9 +168,15 @@ fn main() {
             }
         }
 
-        // 循环模式
-        if !args.cycle {
-            break;
+        // 生产模式
+        if !args.product {
+            if args.cycle {
+                println!("Wait for push key boot {}...", serial_name);
+
+                sleep(Duration::from_millis(1 * 1000));
+            } else {
+                break;
+            }
         } else {
             while serial::open(&serial_name).is_ok() {
                 println!("Wait for disconnect {}...", serial_name);
